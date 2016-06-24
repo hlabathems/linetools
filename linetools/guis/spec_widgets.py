@@ -155,7 +155,7 @@ class ExamineSpecWidget(QtGui.QWidget):
         else:
             ymin, ymax = ylim
         #QtCore.pyqtRemoveInputHook()
-        #xdb.set_trace()
+        #pdb.set_trace()
         #QtCore.pyqtRestoreInputHook()
         self.psdict['x_minmax'] = np.array([xmin, xmax])
         self.psdict['y_minmax'] = [ymin, ymax]
@@ -225,7 +225,7 @@ class ExamineSpecWidget(QtGui.QWidget):
         if event.key in ['N', 'E', '$', 'G']:
             # If column check for line list
             #QtCore.pyqtRemoveInputHook()
-            #xdb.set_trace()
+            #pdb.set_trace()
             #QtCore.pyqtRestoreInputHook()
             if (event.key in ['N', 'E']) & (self.llist['List'] == 'None'):
                 print('xspec: Choose a Line list first!')
@@ -334,7 +334,7 @@ class ExamineSpecWidget(QtGui.QWidget):
 
                         # AODM
                         #QtCore.pyqtRemoveInputHook()
-                        #xdb.set_trace()
+                        #pdb.set_trace()
                         #QtCore.pyqtRestoreInputHook()
                         aline.measure_aodm()
                         mssg = 'Using '+ aline.__repr__()
@@ -354,7 +354,7 @@ class ExamineSpecWidget(QtGui.QWidget):
                 print(mssg)
 
                 #QtCore.pyqtRemoveInputHook()
-                #xdb.set_trace()
+                #pdb.set_trace()
                 #QtCore.pyqtRestoreInputHook()
 
 
@@ -1012,9 +1012,6 @@ U         : Indicate as a upper limit
                              size='x-small', ha='left')
 
                 # Reset window limits
-                #QtCore.pyqtRemoveInputHook()
-                #xdb.set_trace()
-                #QtCore.pyqtRestoreInputHook()
                 self.ax.set_xlim(self.psdict['x_minmax'])
 
                 # Rescale?
@@ -1037,6 +1034,9 @@ U         : Indicate as a upper limit
 
 
                 clr='black'
+                #QtCore.pyqtRemoveInputHook()
+                #pdb.set_trace()
+                #QtCore.pyqtRestoreInputHook()
                 if absline is not None:
                     try:
                         vlim = absline.analy['vlim']
