@@ -388,81 +388,7 @@ class AbsComponent(object):
                     print('Resetting vlim1 from {}'.format(aline))
                 self.vlim[1] = aline.analy['vlim'][1]
 
-    def synthesize_colm(self, overwrite=False, redo_aodm=False, **kwargs):
-        """Synthesize column density measurements of the component.
-        Default is to use the current AbsLine values, but the user can
-        request that those be re-calculated with AODM.
 
-        Parameters
-        ----------
-        overwrite : bool, optional
-          Clobber any previous measurement
-        redo_aodm : bool, optional
-          Redo the individual column density measurements (likely AODM)
-
-        Returns
-        -------
-        None
-          Fills the component attributes instead
-        """
-        # Check
-        if (self.flag_N != 0) and (not overwrite):
-            raise IOError("Column densities already set.  Use clobber=True to redo.")
-        # Redo?
-        if redo_aodm:
-            for aline in self._abslines:
-                aline.measure_aodm(**kwargs)
-        # Collate
-        self.flag_N = 0
-        for aline in self._abslines:
-            if aline.attrib['flag_N'] == 0:  # No value
-                warnings.warn("Absline {} has flag=0.  Hopefully you expected that".format(str(aline)))
-                continue
-            # Check N is filled
-            if np.allclose(aline.attrib['N'].value, 0.):
-                raise ValueError("Need to set N in attrib.  \n Consider linear_clm in linetools.analysis.absline")
-            if aline.attrib['flag_N'] == 1:  # Good value?
-                if self.flag_N == 1:  # Weighted mean
-                    # Original
-                    weight = 1. / self.sig_N**2
-                    mu = self.N * weight
-                    # Update
-                    weight += 1./aline.attrib['sig_N']**2
-                    self.N = (mu + aline.attrib['N']/aline.attrib['sig_N']**2) / weight
-                    self.sig_N = np.sqrt(1./weight)
-                else:  # Fill
-                    self.N = aline.attrib['N']
-                    self.sig_N = aline.attrib['sig_N']
-                    self.flag_N = 1
-            elif aline.attrib['flag_N'] == 2:  # Lower limit
-                if self.flag_N in [0, 3]:
-                    self.N = aline.attrib['N']
-                    self.sig_N = aline.attrib['sig_N']
-                    self.flag_N = 2
-                elif self.flag_N == 2:
-                    if aline.attrib['N'] > self.N:
-                        self.N = aline.attrib['N']
-                        self.sig_N = aline.attrib['sig_N']
-                elif self.flag_N == 1:
-                    pass
-            elif aline.attrib['flag_N'] == 3:  # Upper limit
-                if self.flag_N == 0:
-                    self.N = aline.attrib['N']
-                    self.sig_N = aline.attrib['sig_N']
-                    self.flag_N = 3
-                elif self.flag_N in [1, 2]:
-                    pass
-                elif self.flag_N == 3:
-                    if aline.attrib['N'] < self.N:
-                        self.N = aline.attrib['N']
-                        self.sig_N = aline.attrib['sig_N']
-            elif aline.attrib['flag_N'] == 0:  # No value
-                warnings.warn("Absline {} has flag=0.  Hopefully you expected that")
-            else:
-                raise ValueError("Bad flag_N value")
-        # Log values
-        if self.flag_N > 0:
-            self.logN, self.sig_logN = ltaa.log_clm(self)
 
     def repr_vpfit(self, b=10.*u.km/u.s, tie_strs=('', '', ''), fix_strs=('', '', '')):
         """
@@ -595,6 +521,88 @@ class AbsComponent(object):
         ----------
         """
         ltap.stack_plot(self._abslines, vlim=self.vlim, **kwargs)
+
+    def synthesize_colm(self, overwrite=False, redo_aodm=False, **kwargs):
+        """Synthesize column density measurements of the component.
+        Default is to use the current AbsLine values, but the user can
+        request that those be re-calculated with AODM.
+
+        Parameters
+        ----------
+        overwrite : bool, optional
+          Clobber any previous measurement
+        redo_aodm : bool, optional
+          Redo the individual column density measurements (likely AODM)
+        **kwargs : optional
+          passed to AbsLine.measure_aodm
+
+        Returns
+        -------
+        None
+          Fills the component attributes instead
+        """
+        # Check
+        if (self.flag_N != 0) and (not overwrite):
+            raise IOError("Column densities already set.  Use clobber=True to redo.")
+        # Redo?
+        if redo_aodm:
+            for aline in self._abslines:
+                aline.measure_aodm(**kwargs)
+        # Collate
+        self.flag_N = 0
+        for aline in self._abslines:
+            # Non-useful lines
+            if aline.analy['do_analysis'] == 0:
+                warnings.warn("Absline {} has do_analysis=0.  Hopefully you expected that".format(str(aline)))
+                continue
+            if aline.attrib['flag_N'] == 0:  # No value
+                warnings.warn("Absline {} has flag=0.  Hopefully you expected that".format(str(aline)))
+                continue
+            # Check N is filled
+            if np.allclose(aline.attrib['N'].value, 0.):
+                raise ValueError("Need to set N in attrib.  \n Consider linear_clm in linetools.analysis.absline")
+            if aline.attrib['flag_N'] == 1:  # Good value?
+                if self.flag_N == 1:  # Weighted mean
+                    # Original
+                    weight = 1. / self.sig_N**2
+                    mu = self.N * weight
+                    # Update
+                    weight += 1./aline.attrib['sig_N']**2
+                    self.N = (mu + aline.attrib['N']/aline.attrib['sig_N']**2) / weight
+                    self.sig_N = np.sqrt(1./weight)
+                else:  # Fill
+                    self.N = aline.attrib['N']
+                    self.sig_N = aline.attrib['sig_N']
+                    self.flag_N = 1
+            elif aline.attrib['flag_N'] == 2:  # Lower limit
+                if self.flag_N in [0, 3]:
+                    self.N = aline.attrib['N']
+                    self.sig_N = aline.attrib['sig_N']
+                    self.flag_N = 2
+                elif self.flag_N == 2:
+                    if aline.attrib['N'] > self.N:
+                        self.N = aline.attrib['N']
+                        self.sig_N = aline.attrib['sig_N']
+                elif self.flag_N == 1:
+                    pass
+            elif aline.attrib['flag_N'] == 3:  # Upper limit
+                if self.flag_N == 0:
+                    self.N = aline.attrib['N']
+                    self.sig_N = aline.attrib['sig_N']
+                    self.flag_N = 3
+                elif self.flag_N in [1, 2]:
+                    pass
+                elif self.flag_N == 3:
+                    if aline.attrib['N'] < self.N:
+                        self.N = aline.attrib['N']
+                        self.sig_N = aline.attrib['sig_N']
+            elif aline.attrib['flag_N'] == 0:  # No value
+                warnings.warn("Absline {} has flag=0.  Hopefully you expected that")
+            else:
+                raise ValueError("Bad flag_N value")
+        # Log values
+        if self.flag_N > 0:
+            self.logN, self.sig_logN = ltaa.log_clm(self)
 
     def to_dict(self):
         """ Convert component data to a dict

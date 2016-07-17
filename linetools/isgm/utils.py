@@ -70,7 +70,6 @@ def chk_components(components, chk_match=False, chk_A_none=False, toler=0.2*u.ar
 def build_components_from_abslines(iabslines, clmdict=None, coord=None,
                                    **kwargs):
     """ Generate a list of AbsComponent from a list of abslines
-
     Groups lines with like Zion, Ej, (and A; future)
 
     Parameters

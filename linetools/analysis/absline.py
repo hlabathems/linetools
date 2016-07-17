@@ -138,7 +138,6 @@ def log_clm(obj):
 
 def linear_clm(obj):
     """Return N and sig_N given logN, sig_logN in an object
-
     Also fills the attributes
 
     Parameters
