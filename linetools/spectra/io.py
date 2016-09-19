@@ -25,7 +25,8 @@ from .xspectrum1d import XSpectrum1D
 
 
 def readspec(specfil, inflg=None, efil=None, verbose=False, multi_ivar=False,
-             format='ascii', exten=None, debug=False, select=0, **kwargs):
+             format='ascii', exten=None, head_exten=0, debug=False, select=0,
+             **kwargs):
     """ Read a FITS file (or astropy Table or ASCII file) into a
     XSpectrum1D class
 
@@ -49,6 +50,8 @@ def readspec(specfil, inflg=None, efil=None, verbose=False, multi_ivar=False,
       FITS extension (mainly for multiple binary FITS tables)
     select : int, optional
       Selected spectrum (for sets of 1D spectra, e.g. DESI brick)
+    head_exten : int, optional
+      Extension for header to ingest
 
     Returns
     -------
@@ -78,7 +81,7 @@ def readspec(specfil, inflg=None, efil=None, verbose=False, multi_ivar=False,
                 raise IOError('File does not exist {}'.format(specfil))
             hdulist = fits.open(os.path.expanduser(datfil))
         elif '.hdf5' in specfil:  # HDF5
-            return parse_hdf5(specfil)
+            return parse_hdf5(specfil, **kwargs)
         else: #ASCII
             tbl = Table.read(specfil,format=format)
             # No header?
@@ -198,8 +201,11 @@ def readspec(specfil, inflg=None, efil=None, verbose=False, multi_ivar=False,
                 xspec1d.data['co'] = fits.getdata(co_filename)
 
     # Add in the header
-    #xspec1d.head = head0
-    xspec1d.meta['headers'][0] = head0
+    if head_exten == 0:
+        xspec1d.meta['headers'][0] = head0
+    else:
+        head = hdulist[head_exten].header
+        xspec1d.meta['headers'][0] = head
     if xspec1d.nspec > 1:
         warnings.warn("Read in only 1 header (into meta['headers'][0]")
 
@@ -250,6 +256,50 @@ def get_table_column(tags, hdulist, idx=None):
         return dat.flatten(), tag
     else:
         return dat, 'NONE'
+
+
+def get_wave_unit(tag, hdulist, idx=None):
+    """ Attempt to pull wavelength unit from the Table
+    Parameters
+    ----------
+    tag : str
+     Tag used for wavelengths
+    hdulist : fits header data unit list
+    idx : int, optional
+     Index of list for Table input
+
+    Returns
+    -------
+    unit : astropy Unit
+      Defaults to None
+    """
+    from astropy.units import Unit
+    if idx is None:
+        idx = 1
+    # Use Table
+    if isinstance(hdulist[idx],BinTableHDU):
+        tab = Table(hdulist[idx].data)
+        header = hdulist[idx].header
+    else:
+        # NEED HEADER INFO
+        return None
+    # Try table header (following VLT/X-Shooter here)
+    keys = header.keys()
+    values = header.values()
+    hidx = values.index(tag)
+    if keys[hidx][0:5] == 'TTYPE':
+        try:
+            tunit = header[keys[hidx].replace('TYPE','UNIT')]
+        except KeyError:
+           return None
+        else:
+            if tunit == 'Angstroem':
+                tunit = 'Angstrom'
+            unit = Unit(tunit)
+            return unit
+    else:
+        return None
+
 
 #### ###############################
 #  Set wavelength array using Header cards
@@ -358,6 +408,7 @@ def chk_for_gz(filenm):
         chk=False
         return None, chk
 
+
 def give_wv_units(wave):
     """ Give a wavelength array units of Angstroms, if unitless.
 
@@ -457,7 +508,7 @@ def parse_FITS_binary_table(hdulist, exten=None, wave_tag=None, flux_tag=None,
         return
     # Error
     if sig_tag is None:
-        sig_tags = ['ERROR','ERR','SIGMA_FLUX','ENORM', 'FLAM_SIG', 'SIGMA_UP',
+        sig_tags = ['ERROR','ERR','SIGMA_FLUX','ERR_FLUX', 'ENORM', 'FLAM_SIG', 'SIGMA_UP',
                     'ERRSTIS', 'FLUXERR', 'SIGMA', 'sigma', 'sigma_flux',
                     'er', 'err', 'error', 'sig', 'fluxerror']
     else:
@@ -465,7 +516,7 @@ def parse_FITS_binary_table(hdulist, exten=None, wave_tag=None, flux_tag=None,
     sig, sig_tag = get_table_column(sig_tags, hdulist)
     if sig is None:
         if ivar_tag is None:
-            ivar_tags = ['IVAR', 'IVAR_OPT', 'ivar']
+            ivar_tags = ['IVAR', 'IVAR_OPT', 'ivar', 'FLUX_IVAR']
         else:
             ivar_tags = [ivar_tag]
         ivar, ivar_tag = get_table_column(ivar_tags, hdulist, idx=exten)
@@ -492,6 +543,10 @@ def parse_FITS_binary_table(hdulist, exten=None, wave_tag=None, flux_tag=None,
     wave, wave_tag = get_table_column(wave_tags, hdulist, idx=exten)
     if wave_tag in ['LOGLAM','loglam']:
         wave = 10.**wave
+    # Try for unit
+    wv_unit = get_wave_unit(wave_tag, hdulist, idx=exten)
+    if wv_unit is not None:
+        wave = wave * wv_unit
     if wave is None:
         print('Binary FITS Table but no wavelength tag. Searched for these tags:\n',
               wave_tags)
@@ -548,6 +603,7 @@ def parse_linetools_spectrum_format(hdulist):
 
     return xspec1d
 
+
 def parse_hdf5(inp, **kwargs):
     """ Read a spectrum from HDF5 written in XSpectrum1D format
     Expects:  meta, data, units
@@ -562,23 +618,25 @@ def parse_hdf5(inp, **kwargs):
     """
     import json
     import h5py
+    # Path
+    path = kwargs.pop('path', '/')
     # Open
     if isinstance(inp, basestring):
         hdf5 = h5py.File(inp, 'r')
     else:
         hdf5 = inp
     # Data
-    data = hdf5['data'].value
+    data = hdf5[path+'data'].value
     # Meta
-    if 'meta' in hdf5.keys():
-        meta = json.loads(hdf5['meta'].value)
+    if 'meta' in hdf5[path].keys():
+        meta = json.loads(hdf5[path+'meta'].value)
         # Headers
         for jj,heads in enumerate(meta['headers']):
             meta['headers'][jj] = fits.Header.fromstring(meta['headers'][jj])
     else:
         meta = None
     # Units
-    units = json.loads(hdf5['units'].value)
+    units = json.loads(hdf5[path+'units'].value)
     for key,item in units.items():
         if item == 'dimensionless_unit':
             units[key] = u.dimensionless_unscaled

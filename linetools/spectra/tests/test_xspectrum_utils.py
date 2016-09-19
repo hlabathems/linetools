@@ -52,12 +52,21 @@ def test_write(spec,specm):
 
 
 def test_hdf5(specm):
+    import h5py
     # Write. Should be replaced with tempfile.TemporaryFile
     specm.write_to_hdf5(data_path('tmp.hdf5'))
     #
     specread = io.readspec(data_path('tmp.hdf5'))
     # check a round trip works
     np.testing.assert_allclose(specm.wavelength, specread.wavelength)
+    # Add to existing file
+    tmp2 = h5py.File(data_path('tmp2.hdf5'), 'w')
+    foo = tmp2.create_group('boxcar')
+    specm.add_to_hdf5(tmp2, path='/boxcar/')
+    tmp2.close()
+    # check a round trip works
+    spec3 = io.readspec(data_path('tmp2.hdf5'), path='/boxcar/')
+    np.testing.assert_allclose(specm.wavelength, spec3.wavelength)
 
 
 def test_rebin(spec):
@@ -77,6 +86,10 @@ def test_rebin(spec):
     """
     imn = np.argmin(np.abs(newspec.wavelength-8055*u.AA))
     np.testing.assert_allclose(newspec.sig[imn].value, 0.0169634, rtol=1e-5)
+    # With NANs
+    spec.data['flux'][spec.select][100:110] = np.nan
+    newspec = spec.rebin(new_wv)
+    np.testing.assert_allclose(newspec.flux[1000], 0.9999280967617779)
 
 
 def test_addnoise(spec):
@@ -116,7 +129,7 @@ def test_print_repr(spec):
     print(spec)
 
 
-def test_rebin(spec):
+def test_rebintwo(spec):
     # Add units
     funit = u.erg/u.s/u.cm**2
     spec.units['flux'] = funit

@@ -19,15 +19,15 @@ from astropy.coordinates import SkyCoord
 
 from linetools.analysis import utils as lau
 from linetools.analysis import absline as laa
+from linetools.analysis.linelimits import LineLimits
 from linetools.lists.linelist import LineList
 from linetools import utils as ltu
+from linetools.spectra.xspectrum1d import XSpectrum1D
 
 # A few globals to speed up performance (astropy.Quantity issue)
 zero_coord = SkyCoord(ra=0.*u.deg, dec=0.*u.deg)  # Coords
 init_analy = {
             'spec': None,              # Analysis inputs (e.g. spectrum; from .clm file or AbsID)
-            'wvlim': [0., 0.]*u.AA,    # Wavelength interval about the line (observed)
-            'vlim': [0., 0.]*u.km/u.s, # Rest-frame velocity limit of line, relative to self.attrib['z']
             'flag_kin': 0,             # Use for kinematic analysis?
             'do_analysis': 1           # Analyze?
             }
@@ -75,6 +75,8 @@ class SpectralLine(object):
         Analysis inputs (e.g. a spectrum, wavelength limits)
     data : dict
         Line atomic/molecular data (e.g. f-value, A coefficient, Elow)
+    limits : LineLimit
+        Limits including zlim, vlim, wvlim.
     """
 
     @classmethod
@@ -119,19 +121,23 @@ class SpectralLine(object):
                     if warn_only:
                         warnings.warn("Different data value for {:s}: {}, {}".format(key,sline.data[key],val))
         # Set analy
-        for key in idict['analy']:
+        for key in idict['analy'].keys():
             if isinstance(idict['analy'][key], dict):  # Assume Quantity
                 #sline.analy[key] = Quantity(idict['analy'][key]['value'],
                 #                             unit=idict['analy'][key]['unit'])
                 #pdb.set_trace()
                 sline.analy[key] = ltu.convert_quantity_in_dict(idict['analy'][key])
             elif key == 'spec_file':
-                warnings.warn("You will need to load {:s} into attrib['spec'] yourself".format(
+                # spec_file is intended to be the name of the spectrum file
+                # spec is intendended to hold an XSpectrum1D object
+                warnings.warn("You will need to load {:s} into analy['spec'] yourself".format(
                         idict['analy'][key]))
+                sline.analy[key] = idict['analy'][key]
             else:
                 sline.analy[key] = idict['analy'][key]
+
         # Set attrib
-        for key in idict['attrib']:
+        for key in idict['attrib'].keys():
             if isinstance(idict['attrib'][key], dict):
                 sline.attrib[key] = ltu.convert_quantity_in_dict(idict['attrib'][key])
             elif key in ['RA','DEC']:
@@ -142,6 +148,25 @@ class SpectralLine(object):
                     sline.attrib['coord'] = coord
             else:
                 sline.attrib[key] = idict['attrib'][key]
+
+        # Set limits
+        sline.limits._z = sline.attrib['z']
+        try:  # this try is for compatibility with previous versions w/o limits
+            for key in idict['limits']:
+                if isinstance(idict['limits'][key], dict):
+                    qlim = ltu.convert_quantity_in_dict(idict['limits'][key])
+                    sline.limits.set(qlim)
+                    break  # only one limit is needed to define them all
+                else:
+                    sline.limits.set(idict['limits'][key])  # this is zlim
+                    break  # only one limit is needed to define them all
+        except KeyError:
+            if 'vlim' in sline.analy.keys():  # Backwards compatability
+                if sline.analy['vlim'][1] > sline.analy['vlim'][0]:
+                    sline.limits.set(sline.analy['vlim'])
+            elif 'wvlim' in sline.analy.keys():  # Backwards compatability
+                if sline.analy['wvlim'][1] > sline.analy['wvlim'][0]:
+                    sline.limits.set(sline.analy['wvlim'])
         return sline
 
     # Initialize with wavelength
@@ -161,9 +186,36 @@ class SpectralLine(object):
         self.data = {} # Atomic/Molecular Data (e.g. f-value, A coefficient, Elow)
         self.analy = init_analy.copy()
         self.attrib = init_attrib.copy()
+        self.attrib['z'] = z
 
         # Fill data
         self.fill_data(trans, linelist=linelist, closest=closest, verbose=verbose)
+        # Limits
+        try:
+            zlim = kwargs['zlim']
+        except KeyError:
+            zlim = [z,z]
+        self.limits = LineLimits.from_absline(self, zlim)
+
+    def setz(self, z):
+        """ Set redshift wherever it is needed/expected
+        Parameters
+        ----------
+        z : float
+
+        Returns
+        -------
+
+        """
+        if not isinstance(z,float):
+            raise IOError("Input redshift needs to be a float")
+        # Set
+        self.attrib['z'] = z
+        self.limits._z = z
+        # Warning?
+        if self.limits.is_set():
+            warnings.warn("Consider whether to update the limits of this line")
+
 
     def ismatch(self, inp, Zion=None, RADec=None):
         """Query whether input line matches on:  z, Z, ion, RA, Dec
@@ -235,13 +287,10 @@ class SpectralLine(object):
             raise ValueError('Expecting a unit!')
 
         # Pixels for evaluation
-        if np.sum(self.analy['wvlim'].value > 0.):
-            pix = self.analy['spec'].pix_minmax(self.analy['wvlim'])[0]
-        elif np.sum(np.abs(self.analy['vlim'].value) > 0.):
-            pix = self.analy['spec'].pix_minmax(
-                self.attrib['z'], self.wrest, self.analy['vlim'])[0]
+        if self.limits.is_set():
+            pix = self.analy['spec'].pix_minmax(self.limits.wvlim)[0]
         else:
-            raise ValueError('spectralline.cut_spec: Need to set wvlim or vlim!')
+            raise ValueError('spectralline.cut_spec: Need to set limits!')
         self.analy['pix'] = pix
 
         # Normalize?
@@ -269,8 +318,8 @@ class SpectralLine(object):
     def measure_ew(self, flg=1, initial_guesses=None):
         """ Measures the observer frame equivalent width
 
-        Note this requires the keys `wvlim` and `spec` in analy to
-        be set! Default is simple boxcar integration.
+        Note this requires self.limits to be initialized
+        Default is simple boxcar integration.
         Observer frame, not rest-frame (use measure_restew()
         for rest-frame).
 
@@ -334,7 +383,6 @@ class SpectralLine(object):
         # Save
         self.attrib['kin'] = kin_data
 
-    # EW
     def to_dict(self):
         """ Convert class to dict
 
@@ -346,8 +394,8 @@ class SpectralLine(object):
         from numpy.ma.core import MaskedConstant
         from astropy.units import Quantity
         # Starting
-        adict = dict(ltype=self.ltype, analy=dict(), attrib=dict(), data=dict(),
-                     name=self.name, wrest=dict(value=self.wrest.value,
+        adict = dict(ltype=self.ltype, analy=dict(), attrib=dict(), data=dict(),\
+                     limits=dict(), name=self.name, wrest=dict(value=self.wrest.value,\
                                                   unit=self.wrest.unit.to_string()))
         # Data
         for key in self.data:
@@ -373,18 +421,53 @@ class SpectralLine(object):
         # Analysis
         for key in self.analy:
             if key == 'spec':
-                if self.analy['spec'] is not None:
+                if isinstance(self.analy['spec'], basestring):
+                    adict['analy']['spec_file'] = self.analy['spec']
+                elif isinstance(self.analy['spec'], XSpectrum1D):
                     adict['analy']['spec_file'] = self.analy['spec'].filename
+                else:
+                    pass
             elif isinstance(self.analy[key], Quantity):
                 adict['analy'][key] = dict(value=self.analy[key].value,
                                             unit=self.analy[key].unit.to_string())
             else:
                 adict['analy'][key] = self.analy[key]
 
+        # Limits
+        for key in self.limits._data.keys():
+            if isinstance(self.limits._data[key], Quantity):
+                adict['limits'][key] = dict(value=self.limits._data[key].value,
+                                            unit=self.limits._data[key].unit.to_string())
+            else:
+                adict['limits'][key] = self.limits._data[key]
+
+
         # Polish for JSON
         adict = ltu.jsonify(adict)
         # Return
         return adict
+
+    def coincident_line(self, specline):
+        """Whether the current SpectralLine overlaps in
+        observed wavelength space with the given input SpectralLine
+
+        Parameters
+        ----------
+        specline : SpectralLine
+            A SpectralLine object
+
+        Returns
+        -------
+        answer : bool
+          True if there is overlap in wvobs space, False otherwise.
+
+        """
+        if not self.limits.is_set():
+            raise ValueError("{} has not set its limits!".format(self.__repr__()))
+        if not specline.limits.is_set():
+            raise ValueError("{} has not set its limits!".format(specline.__repr__()))
+
+        return ltu.overlapping_chunks(self.limits.wvlim, specline.limits.wvlim)
 
     def copy(self):
         """ Generate a copy
@@ -459,7 +542,11 @@ class AbsLine(SpectralLine):
 
         # Data
         newline = llist[trans]
-        self.data.update(newline)
+        try:
+            self.data.update(newline)  # Expected to be a LineList dict object
+        except TypeError:
+            pdb.set_trace()
+
 
         # Update
         self.wrest = self.data['wrest']
@@ -557,6 +644,8 @@ class AbsLine(SpectralLine):
             txt = txt+' {:s},'.format(self.data['name'])
         except KeyError:
             pass
+        # z
+        txt = txt + ' z={:.4f}'.format(self.attrib['z'])
         # wrest
         txt = txt + ' wrest={:.4f}'.format(self.wrest)
         # fval
@@ -566,6 +655,7 @@ class AbsLine(SpectralLine):
             pass
         txt = txt + '>'
         return (txt)
+
 
 def many_abslines(all_wrest, llist):
     """Generate a list of AbsLine objects.

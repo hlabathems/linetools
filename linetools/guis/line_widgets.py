@@ -6,11 +6,13 @@ from PyQt4 import QtGui
 from PyQt4 import QtCore
 
 import numpy as np
+import pdb
 
 from astropy.table import Table
 
 from linetools.guis import utils as ltgu
 from linetools.lists.linelist import LineList
+
 
 # #####
 class PlotLinesWidget(QtGui.QWidget):
@@ -165,13 +167,23 @@ class SelectLineWidget(QtGui.QDialog):
         self.lines_widget.addItem('None')
         self.lines_widget.setCurrentRow(0)
 
-        #xdb.set_trace()
         # Loop on lines (could put a preferred list first)
         # Sort
         srt = np.argsort(lines['wrest'])
         for ii in srt:
-            self.lines_widget.addItem('{:s} :: {:.3f} :: {}'.format(lines['name'][ii],
-                                                         lines['wrest'][ii], lines['f'][ii]))
+            try:
+                s = '{:s} :: {:.2f} :: {:.3f}'.format(lines['name'][ii], lines['wrest'][ii],
+                                                      lines['f'][ii])
+            except ValueError:  # f-value masked (most likely)
+                s = '{:s} :: {:.2f}'.format(lines['name'][ii], lines['wrest'][ii])
+            #  is there a column called 'redshift'? (only used in igmguesses for now)
+            try:
+                s += ' :: z{:.3f}'.format(lines['redshift'][ii])
+                self.resize(350, 800)
+            except KeyError:
+                pass
+            self.lines_widget.addItem(s)
+
         self.lines_widget.currentItemChanged.connect(self.on_list_change)
         #self.scrollArea = QtGui.QScrollArea()
 

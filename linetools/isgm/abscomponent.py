@@ -29,6 +29,9 @@ from linetools import utils as ltu
 #from xastropy.stats import basic as xsb
 #from xastropy.xutils import xdebug as xdb
 
+# Global import for speed
+c_kms = const.c.to('km/s').value
+
 # Class for Components
 class AbsComponent(object):
     """
@@ -75,7 +78,7 @@ class AbsComponent(object):
         # Instantiate with the first line
         init_line = abslines[0]
         slf = cls( init_line.attrib['coord'], (init_line.data['Z'],init_line.data['ion']),
-                   init_line.attrib['z'], init_line.analy['vlim'],
+                   init_line.attrib['z'], init_line.limits.vlim,
                    Ej=init_line.data['Ej'], stars=stars)
         slf._abslines.append(init_line)
         # Append with component checking
@@ -203,6 +206,10 @@ class AbsComponent(object):
             self.name = '{:s}_z{:0.5f}'.format(iname, self.zcomp)
         else:
             self.name = name
+
+        # Potential for attributes
+        self.attrib = dict()
+
         # Other
         self._abslines = []
 
@@ -226,8 +233,11 @@ class AbsComponent(object):
         chk_sep : bool, optional
           Perform coordinate check (expensive)
         vtoler : float
-          Tolerance for velocity in km/s
+          Tolerance for velocity in km/s (must be positive)
         """
+        if vtoler < 0:
+            raise ValueError('vtoler must be positive!')
+
         # Perform easy checks
         if chk_sep:
             testc = bool(self.coord.separation(absline.attrib['coord']) < tol)
@@ -238,18 +248,18 @@ class AbsComponent(object):
         testE = bool(self.Ej == absline.data['Ej'])
         # Now redshift/velocity
         if chk_vel:
-            dz_toler = (1+self.zcomp)*vtoler/3e5  # Avoid Quantity for speed
-            zlim_line = (1+absline.attrib['z'])*absline.analy['vlim']/const.c.to('km/s')
-            zlim_comp = (1+self.zcomp)*self.vlim/const.c.to('km/s')
-            testv = (zlim_line[0] >= (zlim_comp[0]-dz_toler)) & (
-                zlim_line[1] <= (zlim_comp[1]+dz_toler))
+            dz_toler = (1 + self.zcomp) * vtoler / c_kms  # Avoid Quantity for speed
+            zlim_line = (1 + absline.attrib['z']) * absline.limits.vlim.to('km/s').value / c_kms
+            zlim_comp = (1+self.zcomp) * self.vlim.to('km/s').value / c_kms
+            testv = (zlim_line[0] >= (zlim_comp[0] - dz_toler)) & (
+                zlim_line[1] <= (zlim_comp[1] + dz_toler))
         else:
             testv = True
         # Combine
         test = testc & testZ & testi & testE & testv
         # Isotope
         if self.A is not None:
-            raise ValueError('Not ready for this yet')
+            raise ValueError('Not ready for this yet.')
         # Append?
         if test:
             self._abslines.append(absline)
@@ -511,6 +521,49 @@ class AbsComponent(object):
         if len(self.comment) > 0:
             s += '# {:s}'.format(self.comment)
         s += '\n'
+        return s
+
+    def repr_joebvp(self, specfile, flags=(2,2,2), b_default=10*u.km/u.s):
+        """
+        String representation for JOEBVP (line fitting software).
+
+        Parameters
+        ----------
+        specfile : str
+            Name of the spectrum file
+        flags : tuple of ints, optional
+            Flags (nflag, bflag, vflag). See JOEBVP input for details
+            about these flags.
+        b_default : Quantity, optional
+            Doppler parameter value adopted in case an absorption
+            line within the component has not set this attribute
+            Default is 10 km/s.
+
+        Returns
+        -------
+        repr_joebvp : str
+            May contain multiple "\n" (1 per absline within component)
+
+        """
+        # Reference:
+        # specfile|restwave|zsys|col|bval|vel|nflag|bflag|vflag|vlim1|vlim2|wobs1|wobs2|trans
+        s = ''
+        for aline in self._abslines:
+            s += '{:s}|{:.5f}|'.format(specfile, aline.wrest.to('AA').value)
+            logN = aline.attrib['logN']
+            b_val = aline.attrib['b'].to('km/s').value
+            if b_val == 0:  # set the default
+                b_val = b_default.to('km/s').value
+            s += '{:.8f}|{:.4f}|{:.4f}|0.|'.format(self.zcomp, logN, b_val)  # `vel` is set to 0. because z is zcomp
+            s += '{}|{}|{}|'.format(int(flags[0]), int(flags[1]), int(flags[2]))
+            vlim = aline.limits.vlim.to('km/s').value
+            wvlim = aline.limits.wvlim.to('AA').value
+            s += '{:.4f}|{:.4f}|{:.5f}|{:.5f}|'.format(vlim[0], vlim[1], wvlim[0], wvlim[1])
+            s += '{:s}'.format(aline.data['ion_name'])
+
+            if len(self.comment) > 0:
+                s += '# {:s}'.format(self.comment)
+            s += '\n'
         return s
 
     def stack_plot(self, **kwargs):

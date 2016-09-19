@@ -74,6 +74,7 @@ class ExamineSpecWidget(QtGui.QWidget):
             spec.airtovac()
         self.orig_spec = spec  # For smoothing
         self.spec = self.orig_spec
+        self.parent = parent
 
         # determine the filename (if any)
         if isinstance(ispec, (str, basestring)):
@@ -181,6 +182,11 @@ class ExamineSpecWidget(QtGui.QWidget):
         """
         # Flag to control re-draw
         flg = -1
+
+        # Quit
+        if event.key == 'q':
+            self.parent.quit()
+            return
 
         # NAVIGATING
         if event.key in self.psdict['nav']:
@@ -291,23 +297,39 @@ class ExamineSpecWidget(QtGui.QWidget):
                     Aguess = np.max(self.spec.flux[pix]-lconti[pix])
                     Cguess = np.mean(self.spec.wavelength[pix])
                     sguess = 0.1*np.abs(self.adict['wv_1']-self.adict['wv_2'])
-                    #QtCore.pyqtRemoveInputHook()
-                    #pdb.set_trace()
-                    #QtCore.pyqtRestoreInputHook()
+                    # Fit
                     g_init = models.Gaussian1D(amplitude=Aguess, mean=Cguess, stddev=sguess)
                     fitter = fitting.LevMarLSQFitter()
                     parm = fitter(g_init, self.spec.wavelength[pix].value,
                                   sign*(self.spec.flux[pix]-lconti[pix]))
+                    # Error
+                    var = [fitter.fit_info['param_cov'][ii,ii] for ii in range(3)]
+                    sig = np.sqrt(var)  # amplitude, mean, stddev
+                    sig_dict = {g_init.param_names[0]:sig[0],
+                                g_init.param_names[1]:sig[1],
+                                g_init.param_names[2]:sig[2], }
+                    # Plot
                     g_final = models.Gaussian1D(amplitude=parm.amplitude.value,
                                                 mean=parm.mean.value, stddev=parm.stddev.value)
-                    # Plot
                     model_Gauss = g_final(self.spec.wavelength.value)
                     self.model = XSpectrum1D.from_tuple((self.spec.wavelength, lconti + sign*model_Gauss))
+                    # Flux
+                    flux = parm.stddev.value*parm.amplitude.value*np.sqrt(2*np.pi)
+                    #flux = parm.stddev.value*(parm.amplitude.value-np.median(lconti[pix]))*np.sqrt(2*np.pi)
+                    sig_flux1 = np.sqrt( (sig_dict['stddev']*parm.amplitude.value*np.sqrt(2*np.pi))**2 + (parm.stddev.value*sig_dict['amplitude']*np.sqrt(2*np.pi))**2)
+                    if self.spec.sig_is_set:
+                        sig_flux2 = np.sqrt(np.sum(self.spec.sig[pix].value**2))
+                    else:
+                        sig_flux2 = 9e9
+                    #QtCore.pyqtRemoveInputHook()
+                    #pdb.set_trace()
+                    #QtCore.pyqtRestoreInputHook()
                     # Message
                     mssg = 'Gaussian Fit: '
                     mssg = mssg+' ::  Mean={:g}, Amplitude={:g}, sigma={:g}, flux={:g}'.format(
-                            parm.mean.value, parm.amplitude.value, parm.stddev.value,
-                            parm.stddev.value*(parm.amplitude.value-np.median(lconti[pix]))*np.sqrt(2*np.pi))
+                            parm.mean.value, parm.amplitude.value, parm.stddev.value, flux)
+                    mssg = mssg+' ::  sig(Mean)={:g}, sig(Amplitude)={:g}, sig(sigma)={:g}, sig(flux)={:g}'.format(
+                            sig_dict['mean'], sig_dict['amplitude'], sig_dict['stddev'], min(sig_flux1,sig_flux2))
                 else:
                     # Find the spectral line (or request it!)
                     rng_wrest = iwv / (self.llist['z']+1)
@@ -315,6 +337,7 @@ class ExamineSpecWidget(QtGui.QWidget):
                                     (self.llist[self.llist['List']].wrest-rng_wrest[1]) < 0.)[0]
                     if len(gdl) == 1:
                         wrest = self.llist[self.llist['List']].wrest[gdl[0]]
+                        closest = False
                     else:
                         if len(gdl) == 0: # Search through them all
                             gdl = np.arange(len(self.llist[self.llist['List']]))
@@ -325,14 +348,15 @@ class ExamineSpecWidget(QtGui.QWidget):
                         quant = line.split('::')[1].lstrip()
                         spltw = quant.split(' ')
                         wrest = Quantity(float(spltw[0]), unit=spltw[1])
+                        closest = True
                     # Units
                     if not hasattr(wrest,'unit'):
                         # Assume Ang
                         wrest = wrest * u.AA
 
                     # Generate the Spectral Line
-                    aline = AbsLine(wrest,linelist=self.llist[self.llist['List']])
-                    aline.attrib['z'] = self.llist['z']
+                    aline = AbsLine(wrest,linelist=self.llist[self.llist['List']],
+                                    z=self.llist['z'], closest=closest)
                     # Generate a temporary spectrum for analysis and apply the local continuum
                     tspec = XSpectrum1D.from_tuple((self.spec.wavelength,
                                                     self.spec.flux, self.spec.sig))
@@ -342,8 +366,8 @@ class ExamineSpecWidget(QtGui.QWidget):
                     # AODM
                     if event.key == 'N':
                         # Calculate the velocity limits and load-up
-                        aline.analy['vlim'] = const.c.to('km/s') * (
-                            ( iwv/(1+self.llist['z']) - wrest) / wrest )
+                        aline.limits.set(const.c.to('km/s') * (
+                            (iwv/(1+self.llist['z']) - wrest) / wrest ))
 
                         # AODM
                         #QtCore.pyqtRemoveInputHook()
@@ -354,7 +378,7 @@ class ExamineSpecWidget(QtGui.QWidget):
                         mssg = mssg + ' ::  logN = {:g} +/- {:g}'.format(
                             aline.attrib['logN'], aline.attrib['sig_logN'])
                     elif event.key == 'E':  #EW
-                        aline.analy['wvlim'] = iwv
+                        aline.limits.set(iwv)
                         aline.measure_restew()
                         mssg = 'Using '+ aline.__repr__()
                         mssg = mssg + ' ::  Rest EW = {:g} +/- {:g}'.format(
@@ -436,7 +460,7 @@ class ExamineSpecWidget(QtGui.QWidget):
                 self.ax.plot(self.spec.wavelength, self.spec.sig, 'r:')
             except ValueError:
                 pass
-            self.ax.set_xlabel('Wavelength')
+            self.ax.set_xlabel('Wavelength (Ang)')
             self.ax.set_ylabel('Flux')
 
             # Rest-frame axis
@@ -505,7 +529,7 @@ class ExamineSpecWidget(QtGui.QWidget):
                         if lines[jj].analy['do_analysis'] == 0:
                             continue
                         # Paint spectrum red
-                        wvlim = wvobs[jj]*(1 + lines[jj].analy['vlim']/const.c.to('km/s'))
+                        wvlim = wvobs[jj]*(1 + lines[jj].limits.vlim/const.c.to('km/s'))
                         pix = np.where( (self.spec.wavelength > wvlim[0]) & (self.spec.wavelength < wvlim[1]))[0]
                         self.ax.plot(self.spec.wavelength[pix], self.spec.flux[pix], '-',drawstyle='steps-mid',
                                      color=clrs[ii])
@@ -711,10 +735,10 @@ U         : Indicate as a upper limit
             #QtCore.pyqtRemoveInputHook()
             #xdb.set_trace()
             #QtCore.pyqtRestoreInputHook()
-            newline = AbsLine(inp[1],linelist=self.llist[self.llist['List']])
+            newline = AbsLine(inp[1],linelist=self.llist[self.llist['List']],
+                              z=self.z)
             print('VelPlot: Generating line {:g}'.format(inp[1]))
-            newline.analy['vlim'] = self.vmnx/2.
-            newline.attrib['z'] = self.z
+            newline.limits.set(self.vmnx/2.)
             newline.analy['do_analysis'] = 1  # Init to ok
             # Spec file
             if self.spec_fil is not None:
@@ -789,15 +813,15 @@ U         : Indicate as a upper limit
         ## Velocity limits
         unit = u.km/u.s
         if event.key == '1':
-            absline.analy['vlim'][0] = event.xdata*unit
+            absline.limits.set((event.xdata, absline.limits.vlim[1].value)*unit)
         if event.key == '2':
-            absline.analy['vlim'][1] = event.xdata*unit
+            absline.limits.set((absline.limits.vlim[0].value, event.xdata)*unit)
         if event.key == '!':  # Set all lines to this value
             for iline in self.abs_lines:
-                iline.analy['vlim'][0] = event.xdata*unit
+                iline.limits.set((event.xdata, iline.limits.vlim[1].value)*unit)
         if event.key == '@':
             for iline in self.abs_lines:
-                iline.analy['vlim'][1] = event.xdata*unit
+                iline.limits.set((iline.limits.vlim[0].value, event.xdata)*unit)
         ## Line type
         if event.key == 'A': # Add to lines
             self.generate_line((self.z,wrest))
@@ -998,10 +1022,14 @@ U         : Indicate as a upper limit
 
                 clr='black'
                 if absline is not None:
-                    try:
-                        vlim = absline.analy['vlim']
-                    except KeyError:
+                    if absline.limits.is_set():
+                        vlim = absline.limits.vlim
+                    else:
                         pass
+                    #try:
+                    #    vlim = absline.analy['vlim']
+                    #except KeyError:
+                    #    pass
                     # Color coding
                     try:  # .clm style
                         flag = absline.analy['FLAGS'][0]

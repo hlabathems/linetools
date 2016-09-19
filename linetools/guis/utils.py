@@ -187,7 +187,7 @@ def read_spec(ispec, exten=None, norm=True, **kwargs):
 
     Parameters
     ----------
-    ispec : Spectrum1D, str, list of files (ordered blue to red),
+    ispec : XSpectrum1D, str, list of files (ordered blue to red),
        or tuple of arrays
     exten : int, optional
       FITS extension
@@ -198,6 +198,8 @@ def read_spec(ispec, exten=None, norm=True, **kwargs):
     spec_file : str
     """
     from linetools.spectra import xspectrum1d as lsx
+    from linetools.spectra import utils as ltsu
+    from astropy.utils.misc import isiterable
     #
     if isinstance(ispec,basestring):
         spec_fil = ispec
@@ -205,10 +207,6 @@ def read_spec(ispec, exten=None, norm=True, **kwargs):
             spec = lsx.XSpectrum1D.from_file(spec_fil, exten=exten, **kwargs['rsp_kwargs'])
         else:
             spec = lsx.XSpectrum1D.from_file(spec_fil, exten=exten)
-        #from PyQt4 import QtCore
-        #QtCore.pyqtRemoveInputHook()
-        #pdb.set_trace()
-        #QtCore.pyqtRestoreInputHook()
     elif isinstance(ispec, lsx.XSpectrum1D):
         spec = ispec
         spec_fil = spec.filename  # Grab from Spectrum1D
@@ -218,26 +216,43 @@ def read_spec(ispec, exten=None, norm=True, **kwargs):
     elif isinstance(ispec,list): # Multiple file names
         # Loop on the files
         for kk,ispecf in enumerate(ispec):
-            jspec = lsx.XSpectrum1D.from_file(ispecf, exten=exten)
+            if isiterable(exten):
+                iexten = exten[kk]
+            else:
+                iexten = exten
+            jspec = lsx.XSpectrum1D.from_file(ispecf, exten=iexten)
             if kk == 0:
                 spec = jspec
                 _, xper1 = ltsp.get_flux_plotrange(spec.flux, perc=0.9)
             else:
                 # Scale flux for convenience of plotting (sig is not scaled)
                 _, xper2 = ltsp.get_flux_plotrange(jspec.flux, perc=0.9)
-                scl = xper1[1]/xper2[1]
+                scl = xper1/xper2
                 # Splice
-                spec = spec.splice(jspec, scale=scl)
+                #from PyQt4 import QtCore
+                #QtCore.pyqtRemoveInputHook()
+                #pdb.set_trace()
+                #QtCore.pyqtRestoreInputHook()
+                spec = ltsu.splice_two(spec, jspec)#, scale=scl)
             # Filename
             spec_fil = ispec[0]
             spec.filename=spec_fil
     else:
-        raise ValueError('Bad input to read_spec: {:s}'.format(type(ispec)))
+        raise ValueError('Bad input to read_spec: {}'.format(type(ispec)))
 
     # Normalize?
     if norm:
         if spec.co_is_set:
             spec.normed=True
+
+    # Demand AA for wavelength unit (unless over-ridden)
+    if spec.wavelength.unit != u.AA:
+        wvAA = spec.wavelength.to('AA')
+        spec.wavelength = wvAA
+    #from PyQt4 import QtCore
+    #QtCore.pyqtRemoveInputHook()
+    #pdb.set_trace()
+    #QtCore.pyqtRestoreInputHook()
 
     # Return
     return spec, spec_fil
